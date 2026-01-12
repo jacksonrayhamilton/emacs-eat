@@ -3845,39 +3845,40 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                         '(read-potential-st (read-dcs-fallback)))
                   (setq loop nil)))))))
         (`(read-charset-standard ,slot ,buf)
-         ;; Find the end.
-         (let ((match (string-match (rx (any ?0 ?2 ?4 ?5 ?6 ?7 ?9 ?<
-                                             ?= ?> ?? ?A ?B ?C ?E ?H
-                                             ?K ?Q ?R ?Y ?Z ?f))
-                                    output index)))
-           (if (not match)
-               (progn
-                 ;; Not found, store the text to process it later when
-                 ;; we find the end.
-                 (setf (eat--t-term-parser-state eat--t-term)
-                       `(read-charset-standard
-                         ,slot ,(concat buf (substring
-                                             output index))))
-                 (setq index (length output)))
-             ;; Got the end!
-             (let ((str (concat buf (substring output index
-                                               (match-end 0)))))
-               (setq index (match-end 0))
-               (setf (eat--t-term-parser-state eat--t-term) nil)
-               ;; Set the character set.
+         ;; Parse charset designator per ECMA-48/VT standards.
+         ;; Valid sequences: ESC ( <intermediate>* <final>
+         ;; - Intermediate bytes: 0x20-0x2F (space through /)
+         ;; - Final byte: 0x30-0x7E (0 through ~)
+         ;; Invalid characters (control chars, high bytes) abort the
+         ;; sequence to prevent accumulating garbage when the escape
+         ;; sequence is malformed or interrupted.
+         (let* ((char (aref output index))
+                (intermediate-p (and (>= char #x20) (<= char #x2F)))
+                (final-p (and (>= char #x30) (<= char #x7E))))
+           (cond
+            ;; Final character - complete the sequence.
+            (final-p
+             (cl-incf index)
+             (setf (eat--t-term-parser-state eat--t-term) nil)
+             (let ((str (concat buf (string char))))
                (eat--t-set-charset
                 slot
                 (pcase str
-                  ;; ESC ( 0.
-                  ;; ESC ) 0.
-                  ;; ESC * 0.
-                  ;; ESC + 0.
+                  ;; ESC ( 0, ESC ) 0, ESC * 0, ESC + 0.
                   ("0" 'dec-line-drawing)
-                  ;; ESC ( B.
-                  ;; ESC ) B.
-                  ;; ESC * B.
-                  ;; ESC + B.
-                  ("B" 'us-ascii)))))))
+                  ;; ESC ( B, ESC ) B, ESC * B, ESC + B.
+                  ("B" 'us-ascii)
+                  ;; Other valid designators default to us-ascii.
+                  (_ 'us-ascii)))))
+            ;; Intermediate character - accumulate for multi-byte
+            ;; designators (rare but valid per ECMA-48).
+            (intermediate-p
+             (cl-incf index)
+             (setf (eat--t-term-parser-state eat--t-term)
+                   `(read-charset-standard ,slot ,(concat buf (string char)))))
+            ;; Invalid character - abort the sequence.
+            (t
+             (setf (eat--t-term-parser-state eat--t-term) nil)))))
         (`(read-charset-vt300 ,_slot)
          (cl-incf index)
          (setf (eat--t-term-parser-state eat--t-term) nil)
