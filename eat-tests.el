@@ -5739,12 +5739,14 @@ automatic scrolling as a side effect."
   (eat--tests-with-term '()
     ;; Test 1: ESC( immediately followed by ESC[37m (SGR sequence).
     ;; The "7" in [37m should NOT be treated as a Swedish charset.
-    ;; The ESC( sequence should abort when it sees the ESC.
+    ;; The ESC( sequence should abort when it sees the ESC, and the
+    ;; [37m should correctly apply white foreground color.
     (output "test\e(\e[37mtext")
-    (should-term :display '("testtext")
+    (should-term :display (list (add-props "testtext"
+                                           '((4 . 8) :foreground "grey90")))
                  :cursor '(1 . 9))
-    ;; Test 2: Valid charset sequences should still work.
-    (output "\n\e(0line\e(Bdrawing")
+    ;; Test 2: Reset color and verify valid charset sequences still work.
+    (output "\e[m\n\e(0line\e(Bdrawing")
     (should-term :display '("testtext"
                             "┌┐┼␊drawing")
                  :cursor '(2 . 14))))
