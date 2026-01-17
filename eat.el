@@ -3845,50 +3845,42 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                         '(read-potential-st (read-dcs-fallback)))
                   (setq loop nil)))))))
         (`(read-charset-standard ,slot ,buf)
-         ;; Find the end.
-         (let ((match (string-match (rx (any ?0 ?2 ?4 ?5 ?6 ?7 ?9 ?<
-                                             ?= ?> ?? ?A ?B ?C ?E ?H
-                                             ?K ?Q ?R ?Y ?Z ?f))
-                                    output index)))
-           (message "DEBUG charset: index=%d len=%d match=%s buf=%S next-chars=%S"
-                    index (length output) match buf
-                    (if (< index (length output))
-                        (substring output index (min (length output) (+ index 5)))
-                      "EOF"))
-           (if (not match)
-               ;; Not found, check if we should keep buffering.
-               (if (< index (length output))
-                   ;; We have new characters to examine.
-                   (let ((next-char (aref output index)))
-                     (message "DEBUG: next-char=%d (%c) control?=%s" next-char next-char (< next-char ?\s))
-                     (if (or (< next-char ?\s)  ; Control character
-                             (>= (length buf) 2)) ; Buffered too much
-                         ;; Invalid charset sequence, abort.
-                         (progn
-                           (message "DEBUG: ABORTING charset, setting state to nil")
-                           (setf (eat--t-term-parser-state eat--t-term) nil))
-                       ;; Valid character, keep buffering.
-                       (setf (eat--t-term-parser-state eat--t-term)
-                             `(read-charset-standard
-                               ,slot ,(concat buf (char-to-string next-char))))
-                       (cl-incf index)))
-                 ;; No new characters available yet, stay in this state.
-                 (setf (eat--t-term-parser-state eat--t-term)
-                       `(read-charset-standard ,slot ,buf)))
-             ;; Got the end!
-             (let ((str (concat buf (substring output index
-                                               (match-end 0)))))
-               (message "DEBUG: Found match! str=%S" str)
-               (setq index (match-end 0))
-               (setf (eat--t-term-parser-state eat--t-term) nil)
-               ;; Set the character set.
-               (let ((charset-value
-                      (pcase str
-                        ("0" 'dec-line-drawing)
-                        ("B" 'us-ascii))))
-                 ;; Only set charset if we recognized the designator.
-                 (when charset-value
-                   (eat--t-set-charset slot charset-value)))))))
+         ;; Charset designator should immediately follow ESC (.
+         (if (>= index (length output))
+             ;; No more input available, keep waiting.
+             (setf (eat--t-term-parser-state eat--t-term)
+                   `(read-charset-standard ,slot ,buf))
+           ;; Check the next character.
+           (let ((next-char (aref output index)))
+             (cond
+              ;; Control character - invalid, abort.
+              ((< next-char ?\s)
+               (setf (eat--t-term-parser-state eat--t-term) nil))
+              ;; Check if it's a valid charset designator.
+              ((memq next-char '(?0 ?2 ?4 ?5 ?6 ?7 ?9 ?<
+                                    ?= ?> ?? ?A ?B ?C ?E ?H
+                                    ?K ?Q ?R ?Y ?Z ?f))
+               ;; Valid designator found!
+               (let ((str (concat buf (char-to-string next-char))))
+                 (cl-incf index)
+                 (setf (eat--t-term-parser-state eat--t-term) nil)
+                 ;; Set the character set.
+                 (let ((charset-value
+                        (pcase str
+                          ("0" 'dec-line-drawing)
+                          ("B" 'us-ascii))))
+                   (when charset-value
+                     (eat--t-set-charset slot charset-value)))))
+              ;; Not a designator, check if we should keep buffering.
+              ((>= (length buf) 2)
+               ;; Buffered too much, abort.
+               (setf (eat--t-term-parser-state eat--t-term) nil))
+              ;; Valid character but not a designator yet, keep buffering.
+              (t
+               (setf (eat--t-term-parser-state eat--t-term)
+                     `(read-charset-standard
+                       ,slot ,(concat buf (char-to-string next-char))))
+               (cl-incf index))))))
         (`(read-charset-vt300 ,_slot)
          (cl-incf index)
          (setf (eat--t-term-parser-state eat--t-term) nil)
