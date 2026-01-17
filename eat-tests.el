@@ -5752,6 +5752,7 @@ automatic scrolling as a side effect."
     ;; Test 2: Verify valid charset sequences still work.
     ;; Note: \e[m resets color for NEW output, but doesn't change
     ;; already-displayed text, so line 1 still has the property ranges.
+    ;; In DEC line drawing: l→┌ i→# n→┼ e→␊
     (output "\e[m\n\e(0line\e(Bdrawing")
     (should-term :display `(,(add-props
                               "testtext"
@@ -5759,7 +5760,7 @@ automatic scrolling as a side effect."
                               `((4 . 8)
                                 :foreground ,(face-foreground
                                               'eat-term-color-7 nil t)))
-                            "┌┐┼␊drawing")
+                            "┌#┼␊drawing")
                  :cursor '(2 . 14))))
 
 (ert-deftest eat-test-save-and-restore-cursor ()
