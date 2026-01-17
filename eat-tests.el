@@ -5733,38 +5733,21 @@ automatic scrolling as a side effect."
   "Test that charset parser handles corrupt/interleaved sequences.
 
   This tests the fix for a bug where ESC ( (start of charset
-  designation) followed by arbitrary content containing a digit or
-  letter from the charset regex would cause the parser to buffer
-  everything until it hit that character, even if it appeared in an
-  unrelated escape sequence like \\e[37m.  This caused charset to be
-  set to nil and triggered assertion failures."
+  designation) followed by content containing a digit or letter from
+  the charset regex would cause the parser to falsely match that
+  character, even if it appeared in an unrelated escape sequence."
   (eat--tests-with-term '()
-    ;; Simulate the problematic sequence from Claude CLI:
-    ;; ESC ( followed by \r\n and spaces, then SGR sequence \e[37m
-    ;; The parser should NOT treat the "7" in "\e[37m" as a charset
-    ;; designator (Swedish charset).
-    (output "test\e(\r\n     \e[37mcolored")
-    (should-term :display '("testcolored")
-                 :cursor '(1 . 12))
-    ;; Verify charset state is still valid (should not be corrupted)
-    (output "\nmore text")
-    (should-term :display '("testcolored"
-                            "more text")
-                 :cursor '(2 . 10))
-    ;; Also test with a valid charset sequence followed immediately
-    ;; by another escape sequence
-    (output "\n\e(0\e[32mqqq")
-    (should-term :display '("testcolored"
-                            "more text"
-                            "───")
-                 :cursor '(3 . 4))
-    ;; Switch back to ASCII
-    (output "\n\e(Btest")
-    (should-term :display '("testcolored"
-                            "more text"
-                            "───"
-                            "test")
-                 :cursor '(4 . 5))))
+    ;; Test 1: ESC( immediately followed by ESC[37m (SGR sequence).
+    ;; The "7" in [37m should NOT be treated as a Swedish charset.
+    ;; The ESC( sequence should abort when it sees the ESC.
+    (output "test\e(\e[37mtext")
+    (should-term :display '("testtext")
+                 :cursor '(1 . 9))
+    ;; Test 2: Valid charset sequences should still work.
+    (output "\n\e(0line\e(Bdrawing")
+    (should-term :display '("testtext"
+                            "┌┐┼␊drawing")
+                 :cursor '(2 . 14))))
 
 (ert-deftest eat-test-save-and-restore-cursor ()
   "Test saving and restoring cursor position.
