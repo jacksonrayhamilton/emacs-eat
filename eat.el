@@ -3851,21 +3851,22 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                                              ?K ?Q ?R ?Y ?Z ?f))
                                     output index)))
            (if (not match)
-               (progn
-                 ;; Not found, store the text to process it later when
-                 ;; we find the end.
-                 ;; GUARD: Charset designators are printable ASCII.
-                 ;; If we see a control char or have buffered too much,
-                 ;; abort to avoid false matches.
-                 (let ((new-content (substring output index)))
-                   (if (or (>= (length buf) 2)
-                           (string-match (rx (any cntrl)) new-content))
-                       ;; Invalid charset sequence, abort.
-                       (setf (eat--t-term-parser-state eat--t-term) nil)
-                     (setf (eat--t-term-parser-state eat--t-term)
-                           `(read-charset-standard
-                             ,slot ,(concat buf new-content)))))
-                 (setq index (length output)))
+               ;; Not found, check if we should keep buffering.
+               (if (< index (length output))
+                   ;; We have new characters to examine.
+                   (let ((next-char (aref output index)))
+                     (if (or (< next-char ?\s)  ; Control character
+                             (>= (length buf) 2)) ; Buffered too much
+                         ;; Invalid charset sequence, abort.
+                         (setf (eat--t-term-parser-state eat--t-term) nil)
+                       ;; Valid character, keep buffering.
+                       (setf (eat--t-term-parser-state eat--t-term)
+                             `(read-charset-standard
+                               ,slot ,(concat buf (char-to-string next-char))))
+                       (cl-incf index)))
+                 ;; No new characters available yet, stay in this state.
+                 (setf (eat--t-term-parser-state eat--t-term)
+                       `(read-charset-standard ,slot ,buf)))
              ;; Got the end!
              (let ((str (concat buf (substring output index
                                                (match-end 0)))))
@@ -3875,15 +3876,7 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                (eat--t-set-charset
                 slot
                 (pcase str
-                  ;; ESC ( 0.
-                  ;; ESC ) 0.
-                  ;; ESC * 0.
-                  ;; ESC + 0.
                   ("0" 'dec-line-drawing)
-                  ;; ESC ( B.
-                  ;; ESC ) B.
-                  ;; ESC * B.
-                  ;; ESC + B.
                   ("B" 'us-ascii)))))))
         (`(read-charset-vt300 ,_slot)
          (cl-incf index)
