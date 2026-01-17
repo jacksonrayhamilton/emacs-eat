@@ -3854,10 +3854,17 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                (progn
                  ;; Not found, store the text to process it later when
                  ;; we find the end.
-                 (setf (eat--t-term-parser-state eat--t-term)
-                       `(read-charset-standard
-                         ,slot ,(concat buf (substring
-                                             output index))))
+                 ;; GUARD: Valid charset designators are 1-2 chars max.
+                 ;; If buffer exceeds this, we likely hit a false match
+                 ;; in unrelated escape sequences. Reset parser to avoid
+                 ;; corruption (e.g., ESC ( followed by \r\n...\e[37m
+                 ;; where the 7 is not a charset designator).
+                 (if (> (length buf) 2)
+                     (setf (eat--t-term-parser-state eat--t-term) nil)
+                   (setf (eat--t-term-parser-state eat--t-term)
+                         `(read-charset-standard
+                           ,slot ,(concat buf (substring
+                                               output index)))))
                  (setq index (length output)))
              ;; Got the end!
              (let ((str (concat buf (substring output index
