@@ -5762,7 +5762,7 @@ automatic scrolling as a side effect."
                                 :foreground ,(face-foreground
                                               'eat-term-color-7 nil t)))
                             "┌#┼␊drawing")
-                 :cursor '(2 . 14))))
+                 :cursor '(2 . 12))))
 
 (ert-deftest eat-test-save-and-restore-cursor ()
   "Test saving and restoring cursor position.
