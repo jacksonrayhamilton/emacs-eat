@@ -3850,15 +3850,23 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                                              ?= ?> ?? ?A ?B ?C ?E ?H
                                              ?K ?Q ?R ?Y ?Z ?f))
                                     output index)))
+           (message "DEBUG charset: index=%d len=%d match=%s buf=%S next-chars=%S"
+                    index (length output) match buf
+                    (if (< index (length output))
+                        (substring output index (min (length output) (+ index 5)))
+                      "EOF"))
            (if (not match)
                ;; Not found, check if we should keep buffering.
                (if (< index (length output))
                    ;; We have new characters to examine.
                    (let ((next-char (aref output index)))
+                     (message "DEBUG: next-char=%d (%c) control?=%s" next-char next-char (< next-char ?\s))
                      (if (or (< next-char ?\s)  ; Control character
                              (>= (length buf) 2)) ; Buffered too much
                          ;; Invalid charset sequence, abort.
-                         (setf (eat--t-term-parser-state eat--t-term) nil)
+                         (progn
+                           (message "DEBUG: ABORTING charset, setting state to nil")
+                           (setf (eat--t-term-parser-state eat--t-term) nil))
                        ;; Valid character, keep buffering.
                        (setf (eat--t-term-parser-state eat--t-term)
                              `(read-charset-standard
@@ -3870,6 +3878,7 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
              ;; Got the end!
              (let ((str (concat buf (substring output index
                                                (match-end 0)))))
+               (message "DEBUG: Found match! str=%S" str)
                (setq index (match-end 0))
                (setf (eat--t-term-parser-state eat--t-term) nil)
                ;; Set the character set.
