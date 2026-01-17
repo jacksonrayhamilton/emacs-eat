@@ -3857,9 +3857,11 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
             ((not match)
              ;; If we've buffered more than 2 chars without finding
              ;; a valid designator, this isn't a charset sequence.
-             ;; Abort and let the content be processed normally.
+             ;; Consume the buffered content and abort.
              (if (>= (length combined) 2)
-                 (setf (eat--t-term-parser-state eat--t-term) nil)
+                 (progn
+                   (setf (eat--t-term-parser-state eat--t-term) nil)
+                   (setq index (+ index (- (length combined) (length buf)))))
                ;; Still waiting for more input.
                (setf (eat--t-term-parser-state eat--t-term)
                      `(read-charset-standard ,slot ,combined))
@@ -3867,7 +3869,9 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
             ;; Match found, but not at the start - invalid sequence.
             ((> match 0)
              ;; The designator isn't immediately after ESC (, abort.
-             (setf (eat--t-term-parser-state eat--t-term) nil))
+             ;; Consume the buffered junk up to (but not including) the match.
+             (setf (eat--t-term-parser-state eat--t-term) nil)
+             (setq index (+ index (- match (length buf)))))
             ;; Match found at position 0 - valid charset sequence.
             (t
              (let ((str (substring combined 0 (match-end 0))))
