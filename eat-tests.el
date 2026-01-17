@@ -5753,6 +5753,7 @@ automatic scrolling as a side effect."
     ;; Note: \e[m resets color for NEW output, but doesn't change
     ;; already-displayed text, so line 1 still has the property ranges.
     ;; In DEC line drawing: l→┌ i→# n→┼ e→␊
+    ;;TODO: Figure out why cursor is at 14 instead of 12
     (output "\e[m\n\e(0line\e(Bdrawing")
     (should-term :display `(,(add-props
                               "testtext"
