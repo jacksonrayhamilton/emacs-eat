@@ -5749,9 +5749,16 @@ automatic scrolling as a side effect."
                                 :foreground ,(face-foreground
                                               'eat-term-color-7 nil t))))
                  :cursor '(1 . 9))
-    ;; Test 2: Reset color and verify valid charset sequences still work.
+    ;; Test 2: Verify valid charset sequences still work.
+    ;; Note: \e[m resets color for NEW output, but doesn't change
+    ;; already-displayed text, so line 1 still has the property ranges.
     (output "\e[m\n\e(0line\e(Bdrawing")
-    (should-term :display '("testtext"
+    (should-term :display `(,(add-props
+                              "testtext"
+                              `((0 . 4) :foreground nil)
+                              `((4 . 8)
+                                :foreground ,(face-foreground
+                                              'eat-term-color-7 nil t)))
                             "┌┐┼␊drawing")
                  :cursor '(2 . 14))))
 
