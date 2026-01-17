@@ -3873,11 +3873,13 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                (setq index (match-end 0))
                (setf (eat--t-term-parser-state eat--t-term) nil)
                ;; Set the character set.
-               (eat--t-set-charset
-                slot
-                (pcase str
-                  ("0" 'dec-line-drawing)
-                  ("B" 'us-ascii)))))))
+               (let ((charset-value
+                      (pcase str
+                        ("0" 'dec-line-drawing)
+                        ("B" 'us-ascii))))
+                 ;; Only set charset if we recognized the designator.
+                 (when charset-value
+                   (eat--t-set-charset slot charset-value)))))))
         (`(read-charset-vt300 ,_slot)
          (cl-incf index)
          (setf (eat--t-term-parser-state eat--t-term) nil)
