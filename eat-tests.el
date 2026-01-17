@@ -5742,12 +5742,12 @@ automatic scrolling as a side effect."
     ;; The ESC( sequence should abort when it sees the ESC, and the
     ;; [37m should correctly apply white foreground color.
     (output "test\e(\e[37mtext")
-    (should-term :display (list (add-props
-                                 "testtext"
-                                 (list (cons 0 4) :foreground nil)
-                                 (list (cons 4 8)
-                                       :foreground (face-foreground
-                                                    'eat-term-color-7 nil t))))
+    (should-term :display `(,(add-props
+                              "testtext"
+                              `((0 . 4) :foreground nil)
+                              `((4 . 8)
+                                :foreground ,(face-foreground
+                                              'eat-term-color-7 nil t))))
                  :cursor '(1 . 9))
     ;; Test 2: Reset color and verify valid charset sequences still work.
     (output "\e[m\n\e(0line\e(Bdrawing")
