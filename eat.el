@@ -3845,55 +3845,40 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                         '(read-potential-st (read-dcs-fallback)))
                   (setq loop nil)))))))
         (`(read-charset-standard ,slot ,buf)
-         ;; Find the end.
-         (let ((match (string-match (rx (any ?0 ?2 ?4 ?5 ?6 ?7 ?9 ?<
-                                             ?= ?> ?? ?A ?B ?C ?E ?H
-                                             ?K ?Q ?R ?Y ?Z ?f))
-                                    output index)))
-           (if (not match)
-               (progn
-                 ;; Not found, store the text to process it later when
-                 ;; we find the end.
-                 ;; GUARD: Valid charset designators are at most 2 chars
-                 ;; after ESC (.  If we've buffered more than that,
-                 ;; abort to avoid false matches in other sequences.
-                 (let ((new-buf (concat buf (substring output index))))
-                   (if (> (length new-buf) 2)
-                       ;; Too much buffered, this isn't a valid charset
-                       ;; sequence. Reset parser.
-                       (setf (eat--t-term-parser-state eat--t-term) nil)
-                     ;; Still within valid range, keep buffering.
-                     (setf (eat--t-term-parser-state eat--t-term)
-                           `(read-charset-standard ,slot ,new-buf))))
-                 (setq index (length output)))
-             ;; Got a match!
-             ;; GUARD: Verify the match is at a valid position.
-             ;; The designator should be within 2 chars of ESC (.
-             (let ((str (concat buf (substring output index
-                                               (match-end 0)))))
-               (if (> (length str) 2)
-                   ;; Match is too far from ESC (, not a valid charset
-                   ;; sequence. Reset parser and don't set charset.
-                   (progn
-                     (setf (eat--t-term-parser-state eat--t-term) nil)
-                     (setq index (match-end 0)))
-                 ;; Valid charset sequence.
-                 (setq index (match-end 0))
+         ;; Charset designator should immediately follow ESC (.
+         ;; Valid designators are 1-2 characters max.
+         (let* ((combined (concat buf (substring output index)))
+                (match (string-match (rx (any ?0 ?2 ?4 ?5 ?6 ?7 ?9 ?<
+                                              ?= ?> ?? ?A ?B ?C ?E ?H
+                                              ?K ?Q ?R ?Y ?Z ?f))
+                                     combined)))
+           (cond
+            ;; No match found yet.
+            ((not match)
+             ;; If we've buffered more than 2 chars without finding
+             ;; a valid designator, this isn't a charset sequence.
+             ;; Abort and let the content be processed normally.
+             (if (>= (length combined) 2)
                  (setf (eat--t-term-parser-state eat--t-term) nil)
-                 ;; Set the character set.
-                 (eat--t-set-charset
-                  slot
-                  (pcase str
-                    ;; ESC ( 0.
-                    ;; ESC ) 0.
-                    ;; ESC * 0.
-                    ;; ESC + 0.
-                    ("0" 'dec-line-drawing)
-                    ;; ESC ( B.
-                    ;; ESC ) B.
-                    ;; ESC * B.
-                    ;; ESC + B.
-                    ("B" 'us-ascii))))))))
+               ;; Still waiting for more input.
+               (setf (eat--t-term-parser-state eat--t-term)
+                     `(read-charset-standard ,slot ,combined))
+               (setq index (length output))))
+            ;; Match found, but not at the start - invalid sequence.
+            ((> match 0)
+             ;; The designator isn't immediately after ESC (, abort.
+             (setf (eat--t-term-parser-state eat--t-term) nil))
+            ;; Match found at position 0 - valid charset sequence.
+            (t
+             (let ((str (substring combined 0 (match-end 0))))
+               (setq index (+ index (- (match-end 0) (length buf))))
+               (setf (eat--t-term-parser-state eat--t-term) nil)
+               ;; Set the character set.
+               (eat--t-set-charset
+                slot
+                (pcase str
+                  ("0" 'dec-line-drawing)
+                  ("B" 'us-ascii))))))))
         (`(read-charset-vt300 ,_slot)
          (cl-incf index)
          (setf (eat--t-term-parser-state eat--t-term) nil)
