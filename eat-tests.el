@@ -5744,6 +5744,7 @@ automatic scrolling as a side effect."
     (output "test\e(\e[37mtext")
     (should-term :display `(,(add-props
                               "testtext"
+                              `((0 . 4) :foreground nil)
                               `((4 . 8)
                                 :foreground ,(face-foreground
                                               'eat-term-color-7 nil t))))
