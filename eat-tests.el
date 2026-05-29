@@ -5771,6 +5771,83 @@ Write plain text and newline to move cursor."
       (should-term :cursor '(1 . 1)))))
 
 
+;;;;; Synchronized Output Tests.
+
+(ert-deftest eat-test-synchronized-output ()
+  "Test synchronized output (DEC private mode 2026).
+
+Output received between BSU (CSI ? 2026 h) and ESU (CSI ? 2026 l)
+should be buffered and applied to the display only once ESU arrives."
+  (eat--tests-with-term '()
+    ;; Begin synchronized update; the write is buffered, not shown.
+    (output "\e[?2026h" "hello")
+    (should-term :display '("") :cursor '(1 . 1))
+    ;; A further write while synchronized is also buffered.
+    (output " world")
+    (should-term :display '("") :cursor '(1 . 1))
+    ;; End synchronized update; the whole frame is applied at once.
+    (output "\e[?2026l")
+    (should-term :display '("hello world") :cursor '(1 . 12))))
+
+(ert-deftest eat-test-synchronized-output-atomic-replace ()
+  "A synchronized frame replaces existing content atomically.
+
+The intermediate state (line erased, partially rewritten) must never
+become visible."
+  (eat--tests-with-term '()
+    (output "AAAA")
+    (should-term :display '("AAAA") :cursor '(1 . 5))
+    ;; Erase the line and start rewriting within a synchronized update.
+    (output "\e[?2026h\e[2K\e[1GBB")
+    (should-term :display '("AAAA") :cursor '(1 . 5))
+    ;; Closing the update reveals the replacement in one step.
+    (output "BB\e[?2026l")
+    (should-term :display '("BBBB") :cursor '(1 . 5))))
+
+(ert-deftest eat-test-synchronized-output-force-flush ()
+  "Force-flushing drains a buffered frame even without ESU.
+
+This is what the synchronized-output timeout timer does: it calls
+`eat-term-process-output' with empty output and FORCE-FLUSH non-nil."
+  (eat--tests-with-term '()
+    (output "\e[?2026h" "partial frame")
+    (should-term :display '("") :cursor '(1 . 1))
+    (eat-term-process-output (terminal) "" 'force-flush)
+    (eat-term-redisplay (terminal))
+    (should-term :display '("partial frame") :cursor '(1 . 14))))
+
+(ert-deftest eat-test-synchronized-output-split-esu ()
+  "ESU split across output chunks still ends the update.
+
+The 8-byte ESU sequence may arrive in pieces; eat must detect it
+across chunk boundaries rather than missing it."
+  (eat--tests-with-term '()
+    (output "\e[?2026hX")
+    (should-term :display '("") :cursor '(1 . 1))
+    ;; First half of the ESU sequence; still buffering.
+    (output "\e[?20")
+    (should-term :display '("") :cursor '(1 . 1))
+    ;; Second half completes the ESU; the frame is flushed.
+    (output "26l")
+    (should-term :display '("X") :cursor '(1 . 2))))
+
+(ert-deftest eat-test-synchronized-output-trailing-content ()
+  "Output after the ESU in the same chunk is rendered normally.
+
+Covers an update whose ESU arrives mid-chunk with content both
+before and after it, plus content buffered from an earlier chunk:
+the frame is the buffered data followed by this chunk's bytes before
+the ESU, and the bytes after the ESU continue as ordinary output."
+  (eat--tests-with-term '()
+    ;; Begin an update and buffer some content in its own chunk.
+    (output "\e[?2026hAAA")
+    (should-term :display '("") :cursor '(1 . 1))
+    ;; This chunk ends the update mid-string and carries trailing
+    ;; output after the ESU.
+    (output "BBB\e[?2026lCCC")
+    (should-term :display '("AAABBBCCC") :cursor '(1 . 10))))
+
+
 ;;;;; Input Event Tests.
 
 (ert-deftest eat-test-input-character ()

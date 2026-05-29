@@ -654,6 +654,17 @@ responsive."
   :group 'eat-ui
   :group 'eat-eshell)
 
+(defcustom eat-sync-update-timeout 1.0
+  "Maximum time in seconds to buffer a synchronized update.
+
+When a client begins a synchronized update (DEC private mode 2026)
+but doesn't end it within this many seconds, the buffered output is
+flushed to the display anyway, so that a misbehaving client can't
+freeze the terminal indefinitely."
+  :type 'number
+  :group 'eat-ui
+  :group 'eat-eshell)
+
 (defcustom eat-term-name #'eat-term-get-suitable-term-name
   "Value for the `TERM' environment variable.
 
@@ -1159,6 +1170,9 @@ For example: when THRESHOLD is 3, \"*foobarbaz\" is converted to
    (1value #'ignore)
    :documentation "Function to handle UI command sequence.")
   (parser-state nil :documentation "State of parser.")
+  (sync-update-timer
+   nil
+   :documentation "Timer ending a synchronized update (DEC mode 2026).")
   (scroll-begin 1 :documentation "First line of scroll region.")
   (scroll-end 24 :documentation "Last line of scroll region.")
   (display nil :documentation "The display.")
@@ -1273,6 +1287,9 @@ Don't `set' it, bind it to a value with `let'.")
   (let ((disp (eat--t-term-display eat--t-term)))
     ;; Reset most of the things to their respective default values.
     (setf (eat--t-term-parser-state eat--t-term) nil)
+    (when (eat--t-term-sync-update-timer eat--t-term)
+      (cancel-timer (eat--t-term-sync-update-timer eat--t-term))
+      (setf (eat--t-term-sync-update-timer eat--t-term) nil))
     (setf (eat--t-disp-begin disp) (point-min-marker))
     (setf (eat--t-disp-old-begin disp) (point-min-marker))
     (setf (eat--t-disp-cursor disp)
@@ -3304,7 +3321,9 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
          (`(,(or 1047 1049))
           (eat--t-enable-alt-disp))
          ('(2004)
-          (eat--t-enable-bracketed-yank)))))))
+          (eat--t-enable-bracketed-yank))
+         ('(2026)
+          (eat--t-begin-synchronized-update)))))))
 
 (defun eat--t-reset-modes (params format)
   "Reset modes according to PARAMS in format FORMAT."
@@ -3341,10 +3360,58 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
          ('(1049)
           (eat--t-disable-alt-disp))
          ('(2004)
-          (eat--t-disable-bracketed-yank)))))))
+          (eat--t-disable-bracketed-yank))
+         ('(2026)
+          (eat--t-end-synchronized-update)))))))
 
-(defun eat--t-handle-output (output)
-  "Parse and evaluate OUTPUT."
+(defun eat--t-begin-synchronized-update ()
+  "Begin a synchronized update (DEC private mode 2026).
+
+Buffer subsequent output in the `read-synchronized' parser state
+until the update ends or `eat-sync-update-timeout' elapses, so that
+partially drawn frames never reach the display."
+  ;; If we're already buffering, keep the existing buffer and timer.
+  (unless (eq (car-safe (eat--t-term-parser-state eat--t-term))
+              'read-synchronized)
+    (setf (eat--t-term-parser-state eat--t-term)
+          (list 'read-synchronized nil ""))
+    (let ((term eat--t-term))
+      (setf (eat--t-term-sync-update-timer eat--t-term)
+            ;; Ensure malformed output that never provides the ESU
+            ;; sequence doesn't leave the terminal hung.
+            (run-with-timer
+             eat-sync-update-timeout nil
+             (lambda ()
+               (when (eat-term-live-p term)
+                 (eat-term-process-output term "" 'force-flush)
+                 (eat-term-redisplay term))))))))
+
+(defun eat--t-end-synchronized-update ()
+  "End a synchronized update (DEC private mode 2026).
+
+Cancel the timeout timer and leave the `read-synchronized' parser
+state.  Does nothing if no update is in progress."
+  (when (eat--t-term-sync-update-timer eat--t-term)
+    (cancel-timer (eat--t-term-sync-update-timer eat--t-term))
+    (setf (eat--t-term-sync-update-timer eat--t-term) nil))
+  (when (eq (car-safe (eat--t-term-parser-state eat--t-term))
+            'read-synchronized)
+    (setf (eat--t-term-parser-state eat--t-term) nil)))
+
+(defun eat--t-handle-output (output &optional force-flush)
+  "Parse and evaluate OUTPUT.
+
+If FORCE-FLUSH is non-nil, immediately render any output that has
+been buffered for an in-progress synchronized update (DEC private
+mode 2026) instead of waiting for the update to end."
+  (when (and force-flush
+             (eq (car-safe (eat--t-term-parser-state eat--t-term))
+                 'read-synchronized))
+    (pcase-let ((`(read-synchronized ,chunks ,carry)
+                 (eat--t-term-parser-state eat--t-term)))
+      (eat--t-end-synchronized-update)
+      ;; emit as much of the frame as we can, then process OUTPUT
+      (eat--t-handle-output (string-join (nreverse (cons carry chunks))))))
   (let ((index 0))
     (while (/= index (length output))
       (pcase-exhaustive (eat--t-term-parser-state eat--t-term)
@@ -3662,6 +3729,41 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
                  ;; CSI u.
                  (`((?u) nil nil)
                   (eat--t-restore-cur)))))))
+        (`(read-synchronized ,chunks ,carry)
+         ;; Synchronized update (DEC private mode 2026): buffer output
+         ;; so entire frames can be rendered at once, without
+         ;; flickering due to partial output.  CARRY holds a trailing
+         ;; partial control sequence so an ESU (CSI ? 2026 l) split
+         ;; across chunks is still detected.  When the update ends,
+         ;; render the whole frame in a single pass.
+         (let* ((combined (concat carry (substring output index)))
+                (match (string-match (rx "\e[?2026l") combined)))
+           (if match
+               ;; Update ended.  The ESU is consumed here; map its end
+               ;; in COMBINED (= CARRY + remaining OUTPUT) back into
+               ;; OUTPUT so the outer loop resumes after it.
+               (let ((frame (string-join (nreverse (cons (substring combined 0 match)
+                                                         chunks)))))
+                 (setq index (+ index (- (match-end 0) (length carry))))
+                 (eat--t-end-synchronized-update)
+                 (eat--t-handle-output frame))
+             ;; Not ended yet.  Hold any trailing partial control
+             ;; sequence in CARRY; buffer the rest as a new chunk.
+             (let* ((tail (string-match
+                           (rx "\e" (zero-or-one
+                                     (seq "[" (zero-or-more
+                                               (any "0-9;?>"))))
+                               string-end)
+                           combined))
+                    (live (if tail (substring combined 0 tail) combined))
+                    (new-carry (if tail (substring combined tail) "")))
+               (setf (eat--t-term-parser-state eat--t-term)
+                     (list 'read-synchronized
+                           (if (zerop (length live))
+                               chunks
+                             (cons live chunks))
+                           new-carry))
+               (setq index (length output))))))
         (`(,(and (or 'read-sos 'read-osc 'read-pm 'read-apc) state)
            ,buf)
          ;; Find the end of string.
@@ -4031,6 +4133,9 @@ If NULLIFY is non-nil, nullify flushed part of Sixel buffer."
   (eat--t-ensure-live-term terminal)
   (let ((inhibit-quit t)
         (eat--t-term terminal))
+    (when (eat--t-term-sync-update-timer eat--t-term)
+      (cancel-timer (eat--t-term-sync-update-timer eat--t-term))
+      (setf (eat--t-term-sync-update-timer eat--t-term) nil))
     (with-current-buffer (eat--t-term-buffer eat--t-term)
       (save-excursion
         (save-restriction
@@ -4236,11 +4341,15 @@ you need the position."
   (let ((disp (eat--t-term-display terminal)))
     (cons (eat--t-disp-width disp) (eat--t-disp-height disp))))
 
-(defun eat-term-process-output (terminal output)
-  "Process OUTPUT from client and show it on TERMINAL's display."
+(defun eat-term-process-output (terminal output &optional force-flush)
+  "Process OUTPUT from client and show it on TERMINAL's display.
+
+If FORCE-FLUSH is non-nil, output buffered for an in-progress
+synchronized update (DEC private mode 2026) is flushed to the
+display even though the update has not ended."
   (let ((inhibit-quit t))
     (eat--t-with-env terminal
-      (eat--t-handle-output output))))
+      (eat--t-handle-output output force-flush))))
 
 (defun eat-term-redisplay (terminal)
   "Prepare TERMINAL for displaying."
